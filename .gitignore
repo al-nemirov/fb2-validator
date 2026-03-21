@@ -12,7 +12,8 @@ env/
 # Данные
 *.fb2
 *.xsd
-fb2_report.txt
+!src/fb2_2_1_fallback.xsd
+fb2_report*.txt
 *_validation_report.txt
 
 # IDE

@@ -11,12 +11,14 @@ FB2 Validator — точка входа.
     python run.py --help                    — справка
 """
 
+import argparse
 import glob
 import logging
 import sys
+from datetime import datetime
 from pathlib import Path
 
-from src.validator import validate_fb2, load_xsd, format_results
+from src.validator import validate_fb2, compile_xsd, load_xsd, format_results
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -28,32 +30,6 @@ def setup_logging(verbose: bool = False) -> None:
         datefmt="%H:%M:%S",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
-
-
-def print_help() -> None:
-    """Вывести справку."""
-    print("""
-FB2 Validator v1.0.0
-=====================
-
-Валидация файлов формата FictionBook 2.0/2.1.
-Проверяет: well-formed XML, XSD-схему, структуру документа.
-
-Использование:
-    python run.py <файлы или директория> [опции]
-
-Примеры:
-    python run.py book.fb2
-    python run.py *.fb2
-    python run.py /path/to/books/
-    python run.py book.fb2 --report
-
-Опции:
-    --report          Сохранить отчёт в fb2_report.txt
-    --no-xsd          Пропустить XSD-валидацию
-    -v, --verbose     Подробный вывод
-    -h, --help        Справка
-""")
 
 
 def collect_files(args: list) -> list:
@@ -77,35 +53,51 @@ def collect_files(args: list) -> list:
     return list(dict.fromkeys(files))  # Убрать дубли, сохранить порядок
 
 
+def build_parser() -> argparse.ArgumentParser:
+    """Создать парсер аргументов командной строки."""
+    parser = argparse.ArgumentParser(
+        prog="fb2-validator",
+        description="Валидация файлов формата FictionBook 2.0/2.1. "
+                    "Проверяет: well-formed XML, XSD-схему, структуру документа.",
+        epilog="Примеры:\n"
+               "  python run.py book.fb2\n"
+               "  python run.py *.fb2\n"
+               "  python run.py /path/to/books/\n"
+               "  python run.py book.fb2 --report\n",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        default=["."],
+        help="FB2-файлы или директории для валидации (по умолчанию: текущая директория)",
+    )
+    parser.add_argument(
+        "--report",
+        action="store_true",
+        help="сохранить отчёт в файл (fb2_report_YYYYMMDD_HHMMSS.txt)",
+    )
+    parser.add_argument(
+        "--no-xsd",
+        action="store_true",
+        help="пропустить XSD-валидацию",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="подробный вывод (DEBUG)",
+    )
+    return parser
+
+
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] in ("--help", "-h", "help"):
-        print_help()
-        return
+    parser = build_parser()
+    args = parser.parse_args()
 
-    # Парсинг аргументов
-    file_args = []
-    save_report = False
-    skip_xsd = False
-    verbose = False
-
-    for arg in sys.argv[1:]:
-        if arg == "--report":
-            save_report = True
-        elif arg == "--no-xsd":
-            skip_xsd = True
-        elif arg in ("-v", "--verbose"):
-            verbose = True
-        else:
-            file_args.append(arg)
-
-    setup_logging(verbose)
+    setup_logging(args.verbose)
     logger = logging.getLogger(__name__)
 
-    # Если нет аргументов-файлов, ищем в текущей директории
-    if not file_args:
-        file_args = ["."]
-
-    files = collect_files(file_args)
+    files = collect_files(args.files)
 
     if not files:
         logger.error("FB2-файлы не найдены")
@@ -113,25 +105,28 @@ def main() -> None:
 
     logger.info(f"Найдено файлов: {len(files)}")
 
-    # Загрузка XSD
-    xsd_content = None
-    if not skip_xsd:
+    # Загрузка и компиляция XSD (один раз для всех файлов)
+    xsd_schema = None
+    if not args.no_xsd:
         xsd_content = load_xsd()
+        if xsd_content:
+            xsd_schema = compile_xsd(xsd_content)
 
     # Валидация
     results = []
     for i, fp in enumerate(files, 1):
         logger.info(f"[{i}/{len(files)}] {fp.name}")
-        result = validate_fb2(str(fp), xsd_content)
+        result = validate_fb2(str(fp), xsd_schema=xsd_schema)
         results.append(result)
 
     # Вывод
     output = format_results(results)
     print(f"\n{output}")
 
-    # Сохранение отчёта
-    if save_report:
-        report_path = "fb2_report.txt"
+    # Сохранение отчёта с меткой времени
+    if args.report:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_path = f"fb2_report_{timestamp}.txt"
         Path(report_path).write_text(output, encoding="utf-8")
         logger.info(f"Отчёт сохранён: {report_path}")
 
